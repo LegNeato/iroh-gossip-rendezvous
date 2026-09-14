@@ -113,13 +113,13 @@ impl Rendezvous {
     /// gossip subscription stops, even while this handle remains alive.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        match self.layer.event_tx.upgrade() {
-            Some(sender) => sender.subscribe(),
-            None => {
+        self.layer.event_tx.upgrade().map_or_else(
+            || {
                 let (_sender, receiver) = broadcast::channel(1);
                 receiver
-            }
-        }
+            },
+            |sender| sender.subscribe(),
+        )
     }
 
     /// Underlying iroh [`Endpoint`]. Share it through [`Builder::gossip`] when
