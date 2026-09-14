@@ -35,6 +35,7 @@ pub(crate) struct GossipLayer {
     pub(crate) sender: GossipSender,
     pub(crate) topic_id: TopicId,
     pub(crate) event_tx: tokio::sync::broadcast::Sender<Event>,
+    owns_runtime: bool,
     neighbors: Arc<Mutex<HashSet<PublicKey>>>,
 }
 
@@ -75,6 +76,7 @@ impl GossipView for GossipLayer {
 /// Inputs to [`build`].
 pub(crate) struct GossipConfig {
     pub endpoint: Option<Endpoint>,
+    pub gossip: Option<Gossip>,
     pub secret_key: Option<SecretKey>,
     pub topic_id: TopicId,
     pub bootstrap_peers: Vec<PublicKey>,
@@ -101,7 +103,10 @@ pub(crate) async fn build(
         }
     };
 
-    let actor = Gossip::builder().spawn(endpoint.clone());
+    let owns_runtime = cfg.gossip.is_none();
+    let actor = cfg
+        .gossip
+        .unwrap_or_else(|| Gossip::builder().spawn(endpoint.clone()));
 
     let topic = actor
         .subscribe(cfg.topic_id, cfg.bootstrap_peers)
@@ -112,7 +117,9 @@ pub(crate) async fn build(
     let neighbors: Arc<Mutex<HashSet<PublicKey>>> = Arc::new(Mutex::new(HashSet::new()));
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<Event>(1024);
 
-    spawn_accept_loop(endpoint.clone(), actor.clone(), cancel.clone(), tasks);
+    if owns_runtime {
+        spawn_accept_loop(endpoint.clone(), actor.clone(), cancel.clone(), tasks);
+    }
     spawn_event_task(
         receiver,
         neighbors.clone(),
@@ -128,17 +135,20 @@ pub(crate) async fn build(
         sender,
         topic_id: cfg.topic_id,
         event_tx,
+        owns_runtime,
         neighbors,
     })
 }
 
-/// Graceful shutdown: close the gossip actor and endpoint.
+/// Closes a standalone runtime. Shared runtimes belong to the application.
 #[mutants::skip] // Async iroh-gossip + endpoint shutdown — unit-testable
 // only via real iroh stacks. Covered by `tests/two_node_bootstrap.rs`'s
 // shutdown paths + the bridge smoke test.
 pub(crate) async fn shutdown(layer: &GossipLayer) {
-    let _ = layer.actor.shutdown().await;
-    layer.endpoint.close().await;
+    if layer.owns_runtime {
+        let _ = layer.actor.shutdown().await;
+        layer.endpoint.close().await;
+    }
 }
 
 // ── Internal tasks ──────────────────────────────────────────────────────
