@@ -88,19 +88,12 @@ name = "keys"
 harness = false
 
 [dependencies]
-iroh = "=1.0.0-rc.0"
-iroh-gossip = "0.99"
+iroh = { version = "1.1", default-features = false, features = ["tls-aws-lc-rs"] }
+iroh-gossip = { version = "0.101", default-features = false, features = ["net"] }
 mainline = { version = "6", features = ["async"] }
-# Crypto stack — several deps are pinned by transitive constraints. See
-# `UPGRADING.md` or the release notes on any bump.
-#
-# * `ed25519-dalek = "=3.0.0-pre.7"`: matched to iroh 1.0.0-rc.0 / iroh-base 1.0.0-rc.0.
-# * `chacha20poly1305 = 0.10`: 0.11 is `rc`. Same story.
-# * `hkdf = 0.13`: works as of mainline 6.1.2, which loosened its `digest`
-#   pin to `0.11`. The HKDF-SHA256 KAT covers compatibility — bump only if
-#   it still passes byte-for-byte.
-# * `rand = 0.9`: 0.10 is coordinated with iroh + bridge; hold until iroh bumps.
-ed25519-dalek = "=3.0.0-pre.7"
+# Match Iroh's stable Ed25519 implementation. Known-answer tests check that
+# the key-derivation and DHT record formats remain unchanged.
+ed25519-dalek = "3"
 chacha20poly1305 = "0.10"
 hkdf = "0.13"
 sha2 = "0.11"
