@@ -34,7 +34,7 @@ pub(crate) struct GossipLayer {
     pub(crate) actor: Gossip,
     pub(crate) sender: GossipSender,
     pub(crate) topic_id: TopicId,
-    pub(crate) event_tx: tokio::sync::broadcast::Sender<Event>,
+    pub(crate) event_tx: tokio::sync::broadcast::WeakSender<Event>,
     neighbors: Arc<Mutex<HashSet<PublicKey>>>,
 }
 
@@ -113,11 +113,12 @@ pub(crate) async fn build(
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<Event>(1024);
 
     spawn_accept_loop(endpoint.clone(), actor.clone(), cancel.clone(), tasks);
+    let event_weak = event_tx.downgrade();
     spawn_event_task(
         receiver,
         neighbors.clone(),
         observable,
-        event_tx.clone(),
+        event_tx,
         cancel,
         tasks,
     );
@@ -127,7 +128,7 @@ pub(crate) async fn build(
         actor,
         sender,
         topic_id: cfg.topic_id,
-        event_tx,
+        event_tx: event_weak,
         neighbors,
     })
 }
@@ -230,7 +231,8 @@ fn spawn_event_task(
         if clean_exit {
             debug!("gossip event task stopped (cancelled)");
         } else {
-            warn!("gossip event task stopped unexpectedly — state will go stale");
+            warn!("gossip event task stopped unexpectedly");
+            cancel.cancel();
         }
     });
 }
