@@ -115,8 +115,8 @@ impl Rendezvous {
         self.layer.event_tx.subscribe()
     }
 
-    /// Underlying iroh [`Endpoint`]. Useful if you want to run additional
-    /// ALPNs on the same port.
+    /// Underlying iroh [`Endpoint`]. Share it through [`Builder::gossip`] when
+    /// an application Router accepts other protocols on the same port.
     #[must_use]
     pub fn endpoint(&self) -> &Endpoint {
         &self.layer.endpoint
@@ -144,8 +144,9 @@ impl Rendezvous {
     }
 
     /// Graceful shutdown. Cancels the background loops, awaits their clean
-    /// exit, then closes the iroh endpoint. Idempotent — second + subsequent
-    /// calls no-op.
+    /// exit, then closes a standalone actor and endpoint. Shared runtimes
+    /// supplied through [`Builder::gossip`] remain open. Drop this handle and
+    /// caller-owned gossip sender clones to release the topic fully.
     #[mutants::skip] // Async shutdown of tokio JoinSets + iroh endpoint;
     // exercised by `tests/two_node_bootstrap.rs::drop_cancels_background_tasks`
     // and the bridge smoke test.

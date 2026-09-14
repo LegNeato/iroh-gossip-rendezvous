@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iroh::{Endpoint, SecretKey};
+use iroh_gossip::Gossip;
 use tokio_util::sync::CancellationToken;
 
 use crate::dht::mainline::MainlineDht;
@@ -47,6 +48,7 @@ pub struct Builder {
     passphrase: Option<String>,
     app_salt: Option<String>,
     endpoint: Option<Endpoint>,
+    gossip: Option<Gossip>,
     secret_key: Option<SecretKey>,
     shards: usize,
     max_age: u8,
@@ -70,6 +72,7 @@ impl Default for Builder {
             passphrase: None,
             app_salt: None,
             endpoint: None,
+            gossip: None,
             secret_key: None,
             shards: DEFAULT_SHARDS,
             max_age: DEFAULT_MAX_AGE,
@@ -106,11 +109,26 @@ impl Builder {
     }
 
     /// Bring your own iroh [`Endpoint`]. Overrides `secret_key` if both are
-    /// supplied. Useful when you need to share ALPNs with other protocols
-    /// on the same endpoint, or to use non-default discovery.
+    /// supplied. This mode owns the endpoint's accept loop and closes the
+    /// endpoint on shutdown. Use [`Self::gossip`] to share a Router instead.
     #[must_use]
     pub fn endpoint(mut self, endpoint: Endpoint) -> Self {
         self.endpoint = Some(endpoint);
+        self.gossip = None;
+        self
+    }
+
+    /// Uses an application's gossip actor without taking over its runtime.
+    ///
+    /// `gossip` must have been created from `endpoint`. Iroh-gossip does not
+    /// expose the actor's endpoint, so this requirement cannot be checked.
+    /// The caller must route the gossip ALPN to this actor. Rendezvous neither
+    /// accepts connections nor closes the actor or endpoint in this mode.
+    /// Overrides an earlier [`Self::endpoint`] or [`Self::secret_key`] choice.
+    #[must_use]
+    pub fn gossip(mut self, endpoint: Endpoint, gossip: Gossip) -> Self {
+        self.endpoint = Some(endpoint);
+        self.gossip = Some(gossip);
         self
     }
 
@@ -248,6 +266,7 @@ impl Builder {
         let layer = gossip_glue::build(
             gossip_glue::GossipConfig {
                 endpoint: self.endpoint,
+                gossip: self.gossip,
                 secret_key: self.secret_key,
                 topic_id,
                 bootstrap_peers: Vec::new(),
