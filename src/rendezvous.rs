@@ -109,10 +109,17 @@ impl Rendezvous {
     /// Subscribe to the gossip event stream. Each call returns a fresh
     /// [`tokio::sync::broadcast::Receiver`] — multiple consumers work.
     /// Lagging receivers may miss events; handle `Err(RecvError::Lagged)` or
-    /// use a generous read cadence.
+    /// use a generous read cadence. The receiver closes when the underlying
+    /// gossip subscription stops, even while this handle remains alive.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.layer.event_tx.subscribe()
+        match self.layer.event_tx.upgrade() {
+            Some(sender) => sender.subscribe(),
+            None => {
+                let (_sender, receiver) = broadcast::channel(1);
+                receiver
+            }
+        }
     }
 
     /// Underlying iroh [`Endpoint`]. Share it through [`Builder::gossip`] when
@@ -172,3 +179,6 @@ impl Drop for Rendezvous {
         self.cancel.cancel();
     }
 }
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests;
