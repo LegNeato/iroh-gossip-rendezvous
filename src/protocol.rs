@@ -340,6 +340,8 @@ fn should_fire_write(random: f32, n: usize) -> bool {
 
 /// Spawn the heal + write loops. Returns a [`JoinSet`] the caller owns —
 /// dropping it aborts the tasks; awaiting each joins cleanly.
+/// Cancellation drops pending DHT and gossip calls, but cannot undo requests
+/// already submitted to a remote peer.
 pub(crate) fn spawn_loops(
     state: Arc<ProtoState>,
     dht: Arc<dyn DhtSlots>,
@@ -361,7 +363,11 @@ pub(crate) fn spawn_loops(
                     () = tokio::time::sleep(sleep) => {}
                     () = cancel.cancelled() => break,
                 }
-                heal_once(&state, dht.as_ref(), gossip.as_ref()).await;
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    () = heal_once(&state, dht.as_ref(), gossip.as_ref()) => {}
+                }
             }
         });
     }
@@ -417,7 +423,11 @@ pub(crate) fn spawn_loops(
                     }
                 };
                 if should_write {
-                    write_once(&state, dht.as_ref(), gossip.as_ref()).await;
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => break,
+                        () = write_once(&state, dht.as_ref(), gossip.as_ref()) => {}
+                    }
                 }
             }
         });
@@ -463,6 +473,8 @@ async fn heal_once(state: &ProtoState, dht: &dyn DhtSlots, gossip: &dyn GossipVi
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    mod cancellation;
+
     use super::*;
     use crate::dht::memory::InMemoryDht;
 
