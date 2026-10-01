@@ -6,6 +6,12 @@ format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (0.3.0):** upgrade to stable Iroh 1.1+, iroh-gossip 0.101,
+  and ed25519-dalek 3 with their default features. Consumers using the
+  exposed Iroh types must upgrade together.
+
 ## [0.2.1] — 2026-05-11
 
 ### Changed
