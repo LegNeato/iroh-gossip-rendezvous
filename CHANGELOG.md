@@ -6,6 +6,13 @@ format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Event subscriptions close when their gossip source stops, including
+  subscriptions created after shutdown.
+- Shutdown cancels in-flight DHT and gossip maintenance so pending work
+  cannot prevent the background tasks from draining.
+
 ## [0.2.1] — 2026-05-11
 
 ### Changed
