@@ -6,12 +6,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
+use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Connection, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, RelayMode};
+use iroh_gossip::api::Event;
 use iroh_gossip::{Gossip, TopicId};
-use iroh_gossip_rendezvous::Builder;
 use iroh_gossip_rendezvous::sim::InMemoryDht;
+use iroh_gossip_rendezvous::{Builder, Rendezvous};
+use tokio::sync::broadcast::{Receiver, error::RecvError};
 
 const ECHO_ALPN: &[u8] = b"rendezvous/tests/echo/1";
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -136,4 +140,112 @@ async fn dropping_shared_rendezvous_does_not_close_application_runtime() {
 
     gossip.shutdown().await.unwrap();
     endpoint.close().await;
+}
+
+async fn wait_for_neighbors(a: &Rendezvous, b: &Rendezvous) {
+    tokio::time::timeout(TIMEOUT, async {
+        while a.state().neighbor_count == 0 || b.state().neighbor_count == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both shared runtimes discover a gossip neighbor");
+}
+
+async fn assert_received(events: &mut Receiver<Event>, expected: &[u8]) {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Event::Received(message) = events.recv().await.unwrap() {
+                assert_eq!(message.content.as_ref(), expected);
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the application Router carries the gossip message");
+}
+
+#[tokio::test]
+async fn shared_runtime_discovers_broadcasts_and_preserves_other_subscriptions() {
+    let endpoint_a = endpoint().await;
+    let endpoint_b = endpoint().await;
+    let lookup = MemoryLookup::new();
+    lookup.add_endpoint_info(endpoint_a.addr());
+    lookup.add_endpoint_info(endpoint_b.addr());
+    endpoint_a.address_lookup().unwrap().add(lookup.clone());
+    endpoint_b.address_lookup().unwrap().add(lookup);
+
+    let gossip_a = Gossip::builder().spawn(endpoint_a.clone());
+    let gossip_b = Gossip::builder().spawn(endpoint_b.clone());
+    let router_a = Router::builder(endpoint_a.clone())
+        .accept(iroh_gossip::ALPN, gossip_a.clone())
+        .spawn();
+    let router_b = Router::builder(endpoint_b.clone())
+        .accept(iroh_gossip::ALPN, gossip_b.clone())
+        .spawn();
+    let dht = Arc::new(InMemoryDht::new());
+    let shared_builder = || {
+        builder()
+            .shards(1)
+            .heal_period(Duration::from_millis(20))
+            .write_period(Duration::from_millis(50))
+            .jitter(0.0)
+            .dht_backend(dht.clone())
+    };
+    let a = shared_builder()
+        .gossip(endpoint_a.clone(), gossip_a.clone())
+        .build()
+        .await
+        .unwrap();
+    let b = shared_builder()
+        .gossip(endpoint_b.clone(), gossip_b.clone())
+        .build()
+        .await
+        .unwrap();
+    wait_for_neighbors(&a, &b).await;
+
+    let mut events = b.subscribe();
+    a.broadcast(Bytes::from_static(b"shared-message"))
+        .await
+        .unwrap();
+    assert_received(&mut events, b"shared-message").await;
+
+    // Attach to an already active topic, including application-owned handles.
+    let application_a = gossip_a.subscribe(a.topic_id(), vec![]).await.unwrap();
+    let application_b = gossip_b.subscribe(b.topic_id(), vec![]).await.unwrap();
+    let other_a = shared_builder()
+        .gossip(endpoint_a.clone(), gossip_a)
+        .build()
+        .await
+        .unwrap();
+    let other_b = shared_builder()
+        .gossip(endpoint_b.clone(), gossip_b)
+        .build()
+        .await
+        .unwrap();
+    wait_for_neighbors(&other_a, &other_b).await;
+
+    a.shutdown().await;
+    b.shutdown().await;
+    tokio::time::timeout(TIMEOUT, async {
+        while events.recv().await != Err(RecvError::Closed) {}
+    })
+    .await
+    .expect("shutdown closes the rendezvous event source");
+    assert!(!endpoint_a.is_closed());
+    assert!(!endpoint_b.is_closed());
+    drop((a, b));
+
+    let mut other_events = other_b.subscribe();
+    other_a
+        .broadcast(Bytes::from_static(b"remaining-topic"))
+        .await
+        .unwrap();
+    assert_received(&mut other_events, b"remaining-topic").await;
+
+    other_a.shutdown().await;
+    other_b.shutdown().await;
+    drop((other_a, other_b, application_a, application_b));
+    router_a.shutdown().await.unwrap();
+    router_b.shutdown().await.unwrap();
 }
